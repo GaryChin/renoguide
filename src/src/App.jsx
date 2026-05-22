@@ -854,106 +854,448 @@ function GoodRow({ text }) {
 }
 
 function FloorPlanScan({ project, scannedAreas, setScannedAreas, rooms, setRooms }) {
-  const [fileName, setFileName] = useState("developer-floor-plan.jpg");
-  const [isScanning, setIsScanning] = useState(false);
+const FLOOR_PLAN_AI_JSON_PROMPT = `
+You are an AI renovation planning assistant for first-time homeowners.
 
-  const scan = () => {
-    setIsScanning(true);
+Analyse the uploaded floor plan or house layout image.
+
+Identify all visible areas, such as living room, dining area, kitchen, dry kitchen, wet kitchen, master bedroom, bedroom 1, bedroom 2, bedroom 3, bathrooms, yard, balcony, car porch, staircase, entrance and any other visible areas.
+
+Return the result in structured JSON only.
+
+For each detected area, include:
+- areaName
+- confidenceScore from 0 to 100
+- likelyFunction
+- renovationPriority: High, Medium or Low
+- phase: Must Do First, Before Move-In, Can Buy Later, or Optional
+- suggestedWorks
+- estimatedBudgetRangeMYR
+- keyReminders
+- buyNowItems
+- buyLaterItems
+- risksOrWarnings
+
+Also provide:
+- overallHomeSummary
+- recommendedRenovationStyle based on the user’s budget
+- whether the user’s budget is realistic
+- top 10 priority tasks
+- top 10 reminders
+- suggested contingency budget
+
+Use beginner-friendly language.
+Do not give professional engineering or structural advice.
+Remind the user to confirm measurements, hacking, electrical, plumbing, waterproofing and structural matters with qualified professionals.
+
+Return JSON in this format:
+
+{
+  "overallHomeSummary": "",
+  "budgetRealism": {
+    "userBudgetMYR": 0,
+    "realisticLevel": "",
+    "summary": "",
+    "recommendedStyle": "",
+    "notRecommended": []
+  },
+  "detectedAreas": [
+    {
+      "areaName": "",
+      "confidenceScore": 0,
+      "likelyFunction": "",
+      "renovationPriority": "",
+      "phase": "",
+      "suggestedWorks": [],
+      "estimatedBudgetRangeMYR": "",
+      "keyReminders": [],
+      "buyNowItems": [],
+      "buyLaterItems": [],
+      "risksOrWarnings": []
+    }
+  ],
+  "priorityTasks": [],
+  "reminders": [],
+  "contingencyBudgetSuggestion": "",
+  "disclaimer": ""
+}
+`.trim();
+
+function getRecommendedStyleFromBudget(budget) {
+  if (budget < 80000) return "Minimalist";
+  if (budget < 150000) return "Modern Contemporary";
+  if (budget < 250000) return "Modern Contemporary or Japandi-lite";
+  if (budget < 300000) return "Japandi or Modern Contemporary";
+  return "Luxury / Premium";
+}
+
+function getBudgetRealismText(budget) {
+  if (budget < 50000) {
+    return {
+      level: "Very tight",
+      summary:
+        "This budget is only suitable for essential move-in works. Focus on safety, defects, basic electrical works, basic lights and must-buy items.",
+      notRecommended: [
+        "Full-house custom carpentry",
+        "Luxury materials",
+        "Major hacking",
+        "Premium bathroom renovation",
+        "Full smart home setup",
+      ],
+    };
+  }
+
+  if (budget < 100000) {
+    return {
+      level: "Basic move-in renovation",
+      summary:
+        "This budget can work for basic move-in renovation, simple lighting, essential electrical works, basic furniture and limited built-in carpentry.",
+      notRecommended: [
+        "Full-house custom cabinets",
+        "Premium kitchen",
+        "Luxury imported materials",
+        "Major hacking",
+      ],
+    };
+  }
+
+  if (budget < 200000) {
+    return {
+      level: "Simple modern renovation",
+      summary:
+        "This budget is suitable for a simple modern renovation with basic kitchen cabinet, selected wardrobes, lighting upgrade, curtains and basic furniture.",
+      notRecommended: [
+        "Too much carpentry",
+        "Premium bathroom fittings in all bathrooms",
+        "Luxury appliances",
+        "Too many design changes after work starts",
+      ],
+    };
+  }
+
+  if (budget < 300000) {
+    return {
+      level: "Comfortable modern home",
+      summary:
+        "This budget is suitable for a comfortable modern home with kitchen cabinet, selected built-ins, lighting upgrade, aircond points, furniture, curtains and appliances.",
+      notRecommended: [
+        "Uncontrolled luxury finishes",
+        "Too much custom carpentry",
+        "Structural changes without professional advice",
+      ],
+    };
+  }
+
+  return {
+    level: "Fuller renovation budget",
+    summary:
+      "This budget gives more flexibility for fuller renovation, more complete carpentry, premium kitchen, better bathroom fittings, smart home features and nicer lighting.",
+    notRecommended: [
+      "Structural works without professional advice",
+      "Luxury imported materials without contingency",
+      "High upfront payment to contractors",
+    ],
+  };
+}
+
+function getAreaWarnings(areaName) {
+  const name = areaName.toLowerCase();
+
+  if (name.includes("kitchen")) {
+    return [
+      "Confirm sink, hob, hood, fridge and oven dimensions before cabinet fabrication.",
+      "Confirm water point, drainage and power points before final cabinet measurement.",
+      "Kitchen cost can increase quickly if countertop, hardware and accessories are upgraded.",
+    ];
+  }
+
+  if (name.includes("bathroom")) {
+    return [
+      "Check waterproofing before tiling.",
+      "Confirm water heater point, drainage and water pressure.",
+      "Do not cover leakage issues before defect checking.",
+    ];
+  }
+
+  if (name.includes("bedroom") || name.includes("room")) {
+    return [
+      "Confirm bed and wardrobe position before electrical point planning.",
+      "Check aircond point and socket locations before painting or ceiling work.",
+    ];
+  }
+
+  if (name.includes("living")) {
+    return [
+      "Confirm TV point, internet point, sockets, fan and lighting layout before plaster ceiling.",
+      "Curtain measurement should be taken after ceiling and curtain box are confirmed.",
+    ];
+  }
+
+  if (name.includes("porch")) {
+    return [
+      "Confirm autogate power point, drainage and CCTV point early.",
+      "Check floor slope to reduce water ponding risk.",
+    ];
+  }
+
+  return [
+    "Confirm measurements before ordering materials or furniture.",
+    "Take photos of hidden wiring and piping before closing walls or ceiling.",
+  ];
+}
+
+function createMockAiVisionJson(project, scannedAreas) {
+  const realism = getBudgetRealismText(project.budget);
+  const recommendedStyle = getRecommendedStyleFromBudget(project.budget);
+  const contingencyLow = Math.round(project.budget * 0.1);
+  const contingencyHigh = Math.round(project.budget * 0.15);
+
+  return {
+    overallHomeSummary: `${project.houseType} with approximately ${project.size} sq ft and ${project.rooms} rooms. The renovation should focus first on defects, measurements, electrical planning, aircond points, plumbing, kitchen planning and waterproofing before cosmetic items.`,
+    budgetRealism: {
+      userBudgetMYR: Number(project.budget || 0),
+      realisticLevel: realism.level,
+      summary: realism.summary,
+      recommendedStyle: recommendedStyle,
+      notRecommended: realism.notRecommended,
+    },
+    detectedAreas: scannedAreas.map((area) => {
+      const template = roomTemplates[area.name] || roomTemplates["Living Room"];
+      const lowBudget = Math.round((area.starter || template.starter || 8000) * 0.8);
+      const highBudget = Math.round((area.starter || template.starter || 8000) * 1.3);
+
+      return {
+        areaName: area.name,
+        confidenceScore: area.confidence,
+        likelyFunction: `Main function appears to be ${area.name.toLowerCase()} planning and renovation.`,
+        renovationPriority:
+          area.priority === "Must Do First"
+            ? "High"
+            : area.priority === "Before Move-In"
+            ? "Medium"
+            : "Low",
+        phase: area.priority,
+        suggestedWorks: area.needs,
+        estimatedBudgetRangeMYR: `${RM.format(lowBudget)} to ${RM.format(highBudget)}`,
+        keyReminders: [
+          "Confirm actual site measurement before ordering.",
+          "Confirm electrical and plumbing points before closing ceiling or walls.",
+          "Keep quotation, receipt, payment proof and warranty documents.",
+        ],
+        buyNowItems: template.must.slice(0, 5),
+        buyLaterItems: template.later.slice(0, 5),
+        risksOrWarnings: getAreaWarnings(area.name),
+      };
+    }),
+    priorityTasks: [
+      "Do full house measurement.",
+      "Check developer defects before renovation starts.",
+      "Confirm electrical socket and lighting plan.",
+      "Confirm aircond piping and aircond points.",
+      "Confirm plumbing and water points.",
+      "Confirm kitchen layout and appliance dimensions.",
+      "Check waterproofing before tiling.",
+      "Take photos of hidden wiring and piping.",
+      "Compare quotations by scope, not only price.",
+      "Do final defect checking before final payment.",
+    ],
+    reminders: [
+      "Electrical and aircond points should be confirmed before plaster ceiling.",
+      "Kitchen appliances should be selected before cabinet final measurement.",
+      "Sink, hob, hood, fridge and oven dimensions should be confirmed before kitchen fabrication.",
+      "Waterproofing should be checked before tiling.",
+      "Take photos of hidden wiring and piping before closing ceiling or walls.",
+      "Do not make final payment before defect checking.",
+      "Check whether hacking, disposal, wiring, delivery and installation are included in quotations.",
+      "Avoid paying too much upfront.",
+      "Keep all receipts, warranties and payment proofs.",
+      "Schedule deep cleaning before move-in.",
+    ],
+    contingencyBudgetSuggestion: `Set aside around ${RM.format(
+      contingencyLow
+    )} to ${RM.format(
+      contingencyHigh
+    )}, which is approximately 10% to 15% of your renovation budget, for unexpected items.`,
+    disclaimer:
+      "AI suggestions are for planning guidance only. Confirm measurements, hacking, electrical works, plumbing, waterproofing, structural matters and quotations with qualified contractors or professionals.",
+  };
+}
+
+function FloorScan({ project, areas, setAreas, rooms, setRooms }) {
+  const [file, setFile] = useState("developer-floor-plan.jpg");
+  const [loading, setLoading] = useState(false);
+  const [aiJson, setAiJson] = useState(() =>
+    createMockAiVisionJson(project, areas)
+  );
+  const [showPrompt, setShowPrompt] = useState(false);
+
+  function runScan() {
+    setLoading(true);
+
     setTimeout(() => {
-      setScannedAreas(mockScanFloorPlan(project));
-      setIsScanning(false);
-    }, 650);
-  };
+      const scanned = scanAreas(project);
+      const jsonResult = createMockAiVisionJson(project, scanned);
 
-  const addArea = (area) => {
+      setAreas(scanned);
+      setAiJson(jsonResult);
+      setLoading(false);
+    }, 700);
+  }
+
+  function add(area) {
     if (rooms.some((r) => r.name === area.name)) return;
-    setRooms([...rooms, makeRoomFromArea(area)]);
-    setScannedAreas(scannedAreas.map((x) => (x.id === area.id ? { ...x, added: true } : x)));
-  };
+    setRooms([...rooms, makeRoom(area)]);
+  }
+
+  function copyJson() {
+    navigator.clipboard.writeText(JSON.stringify(aiJson, null, 2));
+    alert("JSON copied");
+  }
+
+  function copyPrompt() {
+    navigator.clipboard.writeText(FLOOR_PLAN_AI_JSON_PROMPT);
+    alert("AI prompt copied");
+  }
 
   return (
-    <div className="space-y-4 pb-24">
-      <SectionTitle icon={ScanLine} title="Floor Plan Scan" subtitle="Upload your floor plan, brochure layout, house layout image or room photo. Prototype scan is simulated by house type." />
+    <div className="space-y-4 pb-28">
+      <Section
+        icon={ScanLine}
+        title="Floor Plan Scan"
+        subtitle="Upload a floor plan, developer brochure, layout image or room photo. Prototype uses mock AI scan and returns structured JSON."
+      />
 
       <Card>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h3 className="font-bold text-slate-950">Upload floor plan</h3>
-            <p className="mt-1 text-sm text-slate-500">For now, the app uses a mock AI scan. Later, connect this step to a vision API.</p>
+            <h3 className="font-black">Upload floor plan</h3>
+            <p className="text-sm leading-6 text-slate-500">
+              For now, scanning is simulated based on house type. Later, this can connect to a real AI vision API.
+            </p>
           </div>
-          <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-100">
+
+          <label className="flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700">
             <Upload className="h-4 w-4" />
             Choose image
             <input
               type="file"
               accept="image/*"
               className="hidden"
-              onChange={(e) => setFileName(e.target.files?.[0]?.name || "Uploaded floor plan")}
+              onChange={(e) =>
+                setFile(e.target.files?.[0]?.name || "Uploaded image")
+              }
             />
           </label>
         </div>
-        <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-          <div className="aspect-[4/3] rounded-2xl border border-slate-200 bg-white p-4 shadow-inner">
-            <div className="grid h-full grid-cols-3 gap-2 text-[10px] font-bold text-slate-400">
-              <div className="col-span-2 rounded-xl bg-slate-100 p-2">Living</div>
-              <div className="rounded-xl bg-slate-100 p-2">Room</div>
-              <div className="rounded-xl bg-slate-100 p-2">Dining</div>
-              <div className="rounded-xl bg-slate-100 p-2">Kitchen</div>
-              <div className="rounded-xl bg-slate-100 p-2">Bath</div>
-              <div className="rounded-xl bg-slate-100 p-2">Master</div>
-              <div className="rounded-xl bg-slate-100 p-2">Room</div>
-              <div className="rounded-xl bg-slate-100 p-2">Yard</div>
+
+        <div className="mt-4 rounded-3xl bg-slate-50 p-4">
+          <div className="grid aspect-[4/3] grid-cols-3 gap-2 rounded-2xl border border-slate-200 bg-white p-3 text-xs font-bold text-slate-400">
+            <div className="col-span-2 rounded-xl bg-slate-100 p-2">
+              Living
             </div>
+            <div className="rounded-xl bg-slate-100 p-2">Room</div>
+            <div className="rounded-xl bg-slate-100 p-2">Dining</div>
+            <div className="rounded-xl bg-slate-100 p-2">Kitchen</div>
+            <div className="rounded-xl bg-slate-100 p-2">Bath</div>
+            <div className="rounded-xl bg-slate-100 p-2">Master</div>
+            <div className="rounded-xl bg-slate-100 p-2">Yard</div>
           </div>
-          <p className="mt-3 truncate text-xs text-slate-500">Selected: {fileName || "No image uploaded yet"}</p>
+
+          <p className="mt-3 truncate text-xs text-slate-500">
+            Selected: {file}
+          </p>
         </div>
-        <button
-          onClick={scan}
-          className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white shadow-sm"
-        >
-          {isScanning ? <Clock className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}
-          {isScanning ? "Scanning floor plan..." : "Scan Floor Plan"}
-        </button>
+
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          <button
+            onClick={runScan}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white"
+          >
+            <ScanLine className="h-4 w-4" />
+            {loading ? "Scanning..." : "Scan Floor Plan"}
+          </button>
+
+          <button
+            onClick={() => setShowPrompt(!showPrompt)}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700"
+          >
+            <Bot className="h-4 w-4" />
+            {showPrompt ? "Hide AI prompt" : "View AI prompt"}
+          </button>
+        </div>
       </Card>
 
+      {showPrompt && (
+        <Card>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="font-black">Future AI Vision Prompt</h3>
+              <p className="text-sm leading-6 text-slate-500">
+                Use this prompt later when connecting RenoGuide to a real AI vision API.
+              </p>
+            </div>
+
+            <button
+              onClick={copyPrompt}
+              className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-bold text-white"
+            >
+              Copy prompt
+            </button>
+          </div>
+
+          <pre className="max-h-80 overflow-auto rounded-2xl bg-slate-950 p-4 text-xs leading-5 text-slate-100">
+            {FLOOR_PLAN_AI_JSON_PROMPT}
+          </pre>
+        </Card>
+      )}
+
       <div className="grid gap-3 lg:grid-cols-2">
-        {scannedAreas.map((area) => (
-          <Card key={area.id}>
+        {areas.map((a) => (
+          <Card key={a.id}>
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="font-bold text-slate-950">{area.name}</h3>
-                <p className="mt-1 text-xs text-slate-500">AI confidence: {area.confidence}%</p>
+                <h3 className="font-black">{a.name}</h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  AI confidence: {a.confidence}%
+                </p>
               </div>
-              <Badge className={priorityClasses[area.priority]}>{area.priority}</Badge>
+
+              <Badge className={clsPriority(a.priority)}>{a.priority}</Badge>
             </div>
+
             <div className="mt-3">
-              <ProgressBar value={area.confidence} />
+              <Progress value={a.confidence} />
             </div>
+
             <div className="mt-3 rounded-2xl bg-slate-50 p-3">
-              <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Suggested renovation needs</p>
-              <div className="space-y-1.5">
-                {area.suggestedNeeds.map((need) => (
-                  <div key={need} className="flex gap-2 text-xs leading-5 text-slate-600">
-                    <ClipboardCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" /> {need}
-                  </div>
-                ))}
-              </div>
+              <p className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">
+                Suggested renovation needs
+              </p>
+
+              {a.needs.map((n) => (
+                <div key={n} className="flex gap-2 text-xs leading-5 text-slate-600">
+                  <ClipboardCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  {n}
+                </div>
+              ))}
             </div>
-            <div className="mt-3 flex items-center justify-between text-sm">
+
+            <div className="mt-3 flex justify-between text-sm">
               <span className="text-slate-500">Starter budget</span>
-              <span className="font-black text-slate-950">{RM.format(area.starterBudget)}</span>
+              <span className="font-black">{RM.format(a.starter)}</span>
             </div>
+
             <div className="mt-3 grid grid-cols-2 gap-2">
               <button
-                onClick={() => addArea(area)}
-                disabled={rooms.some((r) => r.name === area.name)}
-                className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-200 disabled:text-slate-500"
+                onClick={() => add(a)}
+                className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-bold text-white"
               >
-                {rooms.some((r) => r.name === area.name) ? "Added" : "Add area"}
+                {rooms.some((r) => r.name === a.name) ? "Added" : "Add area"}
               </button>
+
               <button
-                onClick={() => addArea(area)}
-                className="rounded-2xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                onClick={() => add(a)}
+                className="rounded-2xl border border-slate-200 px-3 py-2 text-xs font-bold"
               >
                 Generate template
               </button>
@@ -961,10 +1303,33 @@ function FloorPlanScan({ project, scannedAreas, setScannedAreas, rooms, setRooms
           </Card>
         ))}
       </div>
+
+      {aiJson && (
+        <Card>
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div>
+              <h3 className="font-black">Structured AI Scan JSON</h3>
+              <p className="text-sm leading-6 text-slate-500">
+                This is the mock JSON output format that the real AI floor plan scan should return later.
+              </p>
+            </div>
+
+            <button
+              onClick={copyJson}
+              className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-bold text-white"
+            >
+              Copy JSON
+            </button>
+          </div>
+
+          <pre className="max-h-96 overflow-auto rounded-2xl bg-slate-950 p-4 text-xs leading-5 text-slate-100">
+            {JSON.stringify(aiJson, null, 2)}
+          </pre>
+        </Card>
+      )}
     </div>
   );
 }
-
 function StylePlanner({ project, selectedStyle, setSelectedStyle }) {
   return (
     <div className="space-y-4 pb-24">
