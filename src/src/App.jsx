@@ -853,7 +853,6 @@ function GoodRow({ text }) {
   );
 }
 
-function FloorPlanScan({ project, scannedAreas, setScannedAreas, rooms, setRooms }) {
 const FLOOR_PLAN_AI_JSON_PROMPT = `
 You are an AI renovation planning assistant for first-time homeowners.
 
@@ -878,8 +877,8 @@ For each detected area, include:
 
 Also provide:
 - overallHomeSummary
-- recommendedRenovationStyle based on the user’s budget
-- whether the user’s budget is realistic
+- recommendedRenovationStyle based on the user's budget
+- whether the user's budget is realistic
 - top 10 priority tasks
 - top 10 reminders
 - suggested contingency budget
@@ -999,7 +998,7 @@ function getBudgetRealismText(budget) {
 }
 
 function getAreaWarnings(areaName) {
-  const name = areaName.toLowerCase();
+  const name = String(areaName || "").toLowerCase();
 
   if (name.includes("kitchen")) {
     return [
@@ -1045,13 +1044,13 @@ function getAreaWarnings(areaName) {
 }
 
 function createMockAiVisionJson(project, scannedAreas) {
-  const realism = getBudgetRealismText(project.budget);
-  const recommendedStyle = getRecommendedStyleFromBudget(project.budget);
-  const contingencyLow = Math.round(project.budget * 0.1);
-  const contingencyHigh = Math.round(project.budget * 0.15);
+  const realism = getBudgetRealismText(Number(project.budget || 0));
+  const recommendedStyle = getRecommendedStyleFromBudget(Number(project.budget || 0));
+  const contingencyLow = Math.round(Number(project.budget || 0) * 0.1);
+  const contingencyHigh = Math.round(Number(project.budget || 0) * 0.15);
 
   return {
-    overallHomeSummary: `${project.houseType} with approximately ${project.size} sq ft and ${project.rooms} rooms. The renovation should focus first on defects, measurements, electrical planning, aircond points, plumbing, kitchen planning and waterproofing before cosmetic items.`,
+    overallHomeSummary: `${project.houseType} with approximately ${project.houseSize} sq ft and ${project.rooms} rooms. The renovation should focus first on defects, measurements, electrical planning, aircond points, plumbing, kitchen planning and waterproofing before cosmetic items.`,
     budgetRealism: {
       userBudgetMYR: Number(project.budget || 0),
       realisticLevel: realism.level,
@@ -1061,13 +1060,14 @@ function createMockAiVisionJson(project, scannedAreas) {
     },
     detectedAreas: scannedAreas.map((area) => {
       const template = roomTemplates[area.name] || roomTemplates["Living Room"];
-      const lowBudget = Math.round((area.starter || template.starter || 8000) * 0.8);
-      const highBudget = Math.round((area.starter || template.starter || 8000) * 1.3);
+      const baseBudget = area.starterBudget || template.starterBudget || 8000;
+      const lowBudget = Math.round(baseBudget * 0.8);
+      const highBudget = Math.round(baseBudget * 1.3);
 
       return {
         areaName: area.name,
         confidenceScore: area.confidence,
-        likelyFunction: `Main function appears to be ${area.name.toLowerCase()} planning and renovation.`,
+        likelyFunction: `Main function appears to be ${String(area.name || "").toLowerCase()} planning and renovation.`,
         renovationPriority:
           area.priority === "Must Do First"
             ? "High"
@@ -1075,7 +1075,7 @@ function createMockAiVisionJson(project, scannedAreas) {
             ? "Medium"
             : "Low",
         phase: area.priority,
-        suggestedWorks: area.needs,
+        suggestedWorks: area.suggestedNeeds || template.must.slice(0, 4),
         estimatedBudgetRangeMYR: `${RM.format(lowBudget)} to ${RM.format(highBudget)}`,
         keyReminders: [
           "Confirm actual site measurement before ordering.",
@@ -1121,11 +1121,11 @@ function createMockAiVisionJson(project, scannedAreas) {
   };
 }
 
-function FloorScan({ project, areas, setAreas, rooms, setRooms }) {
+function FloorPlanScan({ project, scannedAreas, setScannedAreas, rooms, setRooms }) {
   const [file, setFile] = useState("developer-floor-plan.jpg");
   const [loading, setLoading] = useState(false);
   const [aiJson, setAiJson] = useState(() =>
-    createMockAiVisionJson(project, areas)
+    createMockAiVisionJson(project, scannedAreas)
   );
   const [showPrompt, setShowPrompt] = useState(false);
 
@@ -1133,10 +1133,10 @@ function FloorScan({ project, areas, setAreas, rooms, setRooms }) {
     setLoading(true);
 
     setTimeout(() => {
-      const scanned = scanAreas(project);
+      const scanned = mockScanFloorPlan(project);
       const jsonResult = createMockAiVisionJson(project, scanned);
 
-      setAreas(scanned);
+      setScannedAreas(scanned);
       setAiJson(jsonResult);
       setLoading(false);
     }, 700);
@@ -1144,22 +1144,23 @@ function FloorScan({ project, areas, setAreas, rooms, setRooms }) {
 
   function add(area) {
     if (rooms.some((r) => r.name === area.name)) return;
-    setRooms([...rooms, makeRoom(area)]);
+    setRooms([...rooms, makeRoomFromArea(area)]);
+    setScannedAreas(scannedAreas.map((x) => (x.id === area.id ? { ...x, added: true } : x)));
   }
 
   function copyJson() {
-    navigator.clipboard.writeText(JSON.stringify(aiJson, null, 2));
+    navigator.clipboard?.writeText(JSON.stringify(aiJson, null, 2));
     alert("JSON copied");
   }
 
   function copyPrompt() {
-    navigator.clipboard.writeText(FLOOR_PLAN_AI_JSON_PROMPT);
+    navigator.clipboard?.writeText(FLOOR_PLAN_AI_JSON_PROMPT);
     alert("AI prompt copied");
   }
 
   return (
-    <div className="space-y-4 pb-28">
-      <Section
+    <div className="space-y-4 pb-24">
+      <SectionTitle
         icon={ScanLine}
         title="Floor Plan Scan"
         subtitle="Upload a floor plan, developer brochure, layout image or room photo. Prototype uses mock AI scan and returns structured JSON."
@@ -1168,51 +1169,47 @@ function FloorScan({ project, areas, setAreas, rooms, setRooms }) {
       <Card>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h3 className="font-black">Upload floor plan</h3>
-            <p className="text-sm leading-6 text-slate-500">
+            <h3 className="font-bold text-slate-950">Upload floor plan</h3>
+            <p className="mt-1 text-sm text-slate-500">
               For now, scanning is simulated based on house type. Later, this can connect to a real AI vision API.
             </p>
           </div>
 
-          <label className="flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700">
+          <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-100">
             <Upload className="h-4 w-4" />
             Choose image
             <input
               type="file"
               accept="image/*"
               className="hidden"
-              onChange={(e) =>
-                setFile(e.target.files?.[0]?.name || "Uploaded image")
-              }
+              onChange={(e) => setFile(e.target.files?.[0]?.name || "Uploaded floor plan")}
             />
           </label>
         </div>
 
-        <div className="mt-4 rounded-3xl bg-slate-50 p-4">
-          <div className="grid aspect-[4/3] grid-cols-3 gap-2 rounded-2xl border border-slate-200 bg-white p-3 text-xs font-bold text-slate-400">
-            <div className="col-span-2 rounded-xl bg-slate-100 p-2">
-              Living
+        <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+          <div className="aspect-[4/3] rounded-2xl border border-slate-200 bg-white p-4 shadow-inner">
+            <div className="grid h-full grid-cols-3 gap-2 text-[10px] font-bold text-slate-400">
+              <div className="col-span-2 rounded-xl bg-slate-100 p-2">Living</div>
+              <div className="rounded-xl bg-slate-100 p-2">Room</div>
+              <div className="rounded-xl bg-slate-100 p-2">Dining</div>
+              <div className="rounded-xl bg-slate-100 p-2">Kitchen</div>
+              <div className="rounded-xl bg-slate-100 p-2">Bath</div>
+              <div className="rounded-xl bg-slate-100 p-2">Master</div>
+              <div className="rounded-xl bg-slate-100 p-2">Room</div>
+              <div className="rounded-xl bg-slate-100 p-2">Yard</div>
             </div>
-            <div className="rounded-xl bg-slate-100 p-2">Room</div>
-            <div className="rounded-xl bg-slate-100 p-2">Dining</div>
-            <div className="rounded-xl bg-slate-100 p-2">Kitchen</div>
-            <div className="rounded-xl bg-slate-100 p-2">Bath</div>
-            <div className="rounded-xl bg-slate-100 p-2">Master</div>
-            <div className="rounded-xl bg-slate-100 p-2">Yard</div>
           </div>
-
-          <p className="mt-3 truncate text-xs text-slate-500">
-            Selected: {file}
-          </p>
+          <p className="mt-3 truncate text-xs text-slate-500">Selected: {file || "No image uploaded yet"}</p>
         </div>
 
         <div className="mt-4 grid gap-2 sm:grid-cols-2">
           <button
             onClick={runScan}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white"
+            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white shadow-sm"
           >
-            <ScanLine className="h-4 w-4" />
-            {loading ? "Scanning..." : "Scan Floor Plan"}
+            {loading ? <Clock className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}
+            {loading ? "Scanning floor plan..." : "Scan Floor Plan"}
           </button>
 
           <button
@@ -1229,7 +1226,7 @@ function FloorScan({ project, areas, setAreas, rooms, setRooms }) {
         <Card>
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
-              <h3 className="font-black">Future AI Vision Prompt</h3>
+              <h3 className="font-bold text-slate-950">Future AI Vision Prompt</h3>
               <p className="text-sm leading-6 text-slate-500">
                 Use this prompt later when connecting RenoGuide to a real AI vision API.
               </p>
@@ -1250,52 +1247,50 @@ function FloorScan({ project, areas, setAreas, rooms, setRooms }) {
       )}
 
       <div className="grid gap-3 lg:grid-cols-2">
-        {areas.map((a) => (
-          <Card key={a.id}>
+        {scannedAreas.map((area) => (
+          <Card key={area.id}>
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="font-black">{a.name}</h3>
-                <p className="mt-1 text-xs text-slate-500">
-                  AI confidence: {a.confidence}%
-                </p>
+                <h3 className="font-bold text-slate-950">{area.name}</h3>
+                <p className="mt-1 text-xs text-slate-500">AI confidence: {area.confidence}%</p>
               </div>
-
-              <Badge className={clsPriority(a.priority)}>{a.priority}</Badge>
+              <Badge className={priorityClasses[area.priority]}>{area.priority}</Badge>
             </div>
 
             <div className="mt-3">
-              <Progress value={a.confidence} />
+              <ProgressBar value={area.confidence} />
             </div>
 
             <div className="mt-3 rounded-2xl bg-slate-50 p-3">
-              <p className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">
+              <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">
                 Suggested renovation needs
               </p>
-
-              {a.needs.map((n) => (
-                <div key={n} className="flex gap-2 text-xs leading-5 text-slate-600">
-                  <ClipboardCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  {n}
-                </div>
-              ))}
+              <div className="space-y-1.5">
+                {(area.suggestedNeeds || []).map((need) => (
+                  <div key={need} className="flex gap-2 text-xs leading-5 text-slate-600">
+                    <ClipboardCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" />
+                    {need}
+                  </div>
+                ))}
+              </div>
             </div>
 
-            <div className="mt-3 flex justify-between text-sm">
+            <div className="mt-3 flex items-center justify-between text-sm">
               <span className="text-slate-500">Starter budget</span>
-              <span className="font-black">{RM.format(a.starter)}</span>
+              <span className="font-black text-slate-950">{RM.format(area.starterBudget)}</span>
             </div>
 
             <div className="mt-3 grid grid-cols-2 gap-2">
               <button
-                onClick={() => add(a)}
-                className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-bold text-white"
+                onClick={() => add(area)}
+                disabled={rooms.some((r) => r.name === area.name)}
+                className="rounded-2xl bg-slate-900 px-3 py-2 text-xs font-bold text-white disabled:bg-slate-200 disabled:text-slate-500"
               >
-                {rooms.some((r) => r.name === a.name) ? "Added" : "Add area"}
+                {rooms.some((r) => r.name === area.name) ? "Added" : "Add area"}
               </button>
-
               <button
-                onClick={() => add(a)}
-                className="rounded-2xl border border-slate-200 px-3 py-2 text-xs font-bold"
+                onClick={() => add(area)}
+                className="rounded-2xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
               >
                 Generate template
               </button>
@@ -1308,7 +1303,7 @@ function FloorScan({ project, areas, setAreas, rooms, setRooms }) {
         <Card>
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>
-              <h3 className="font-black">Structured AI Scan JSON</h3>
+              <h3 className="font-bold text-slate-950">Structured AI Scan JSON</h3>
               <p className="text-sm leading-6 text-slate-500">
                 This is the mock JSON output format that the real AI floor plan scan should return later.
               </p>
@@ -1330,6 +1325,7 @@ function FloorScan({ project, areas, setAreas, rooms, setRooms }) {
     </div>
   );
 }
+
 function StylePlanner({ project, selectedStyle, setSelectedStyle }) {
   return (
     <div className="space-y-4 pb-24">
